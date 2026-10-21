@@ -52,6 +52,7 @@ Singleton {
 
     readonly property string backendPath: decodeURIComponent(Qt.resolvedUrl("storage_backend.py").toString()).replace(/^file:\/\//, "")
     property bool actionsAvailable: false
+    property string actionDependencyError: ""
     property string _actionRequest: ""
 
     Timer {
@@ -155,6 +156,7 @@ Singleton {
                 }
                 root.partitions = data.partitions;
                 root.actionsAvailable = data.actionsAvailable;
+                root.actionDependencyError = data.actionDependencyError || "";
             } catch (e) {
                 root.lastError = "Storage discovery failed. Check Python 3, lsblk and findmnt.";
             }

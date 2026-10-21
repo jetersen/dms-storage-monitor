@@ -508,11 +508,11 @@ PopoutComponent {
                 Item {
                     width: parent.width
                     height: 24
-                    visible: !root.storage.actionsAvailable
+                    visible: !root.storage.actionsAvailable && root.storage.actionDependencyError.length > 0
 
                     StyledText {
                         anchors.fill: parent
-                        text: "Monitoring only · storage actions need Python Gio"
+                        text: root.storage.actionDependencyError
                         wrapMode: Text.WordWrap
                         font.pixelSize: 10
                         color: Theme.surfaceVariantText

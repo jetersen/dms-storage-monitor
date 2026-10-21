@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Read-only discovery uses Python stdlib. Only explicit actions import Gio."""
-import importlib.util
+"""Python stdlib discovery and guarded UDisks actions through udisksctl."""
 import json
 import math
 import os
+import re
+import shutil
 import subprocess
 import sys
 
@@ -12,6 +13,7 @@ BLOCK, FS, ENC = (PREFIX + name for name in ("Block", "Filesystem", "Encrypted")
 DRIVE = PREFIX + "Drive"
 SERVICE = "org.freedesktop.UDisks2"
 BASE = "/org/freedesktop/UDisks2"
+UDISKSCTL = "udisksctl"
 SYSTEM_PATHS = ("/boot", "/efi", "/home", "/nix", "/usr", "/var", "/srv", "/etc", "/opt", "/root")
 MEMBERS = {"swap", "LVM2_member", "linux_raid_member", "zfs_member", "crypto_LUKS"}
 
@@ -220,8 +222,13 @@ def probe():
         objects = read_objects()
     except (OSError, ValueError, KeyError, subprocess.SubprocessError):
         objects = {}
-    return {"partitions": inventory(lsblk, mounts, objects),
-            "actionsAvailable": importlib.util.find_spec("gi") is not None}
+    missing = []
+    if not shutil.which(UDISKSCTL):
+        missing.append("udisksctl")
+    if not objects:
+        missing.append("udisks2 and busctl")
+    return {"partitions": inventory(lsblk, mounts, objects), "actionsAvailable": not missing,
+            "actionDependencyError": "Monitoring only · storage actions need " + ", ".join(missing) if missing else ""}
 
 
 class ActionError(Exception):
@@ -236,24 +243,37 @@ def current_row(request, probe_fn, power_off=False):
 
 
 class UDisks:
-    def __init__(self):
-        try:
-            import gi
-            gi.require_version("Gio", "2.0")
-            from gi.repository import Gio, GLib
-        except (ImportError, ValueError):
-            raise ActionError("Storage actions need Python PyGObject (Gio). Monitoring does not.") from None
-        self.Gio, self.GLib = Gio, GLib
-        self.bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
-
     def objects(self):
-        return self.bus.call_sync(SERVICE, BASE, "org.freedesktop.DBus.ObjectManager", "GetManagedObjects",
-                                  None, None, self.Gio.DBusCallFlags.NONE, 15000, None).unpack()[0]
+        return read_objects()
 
     def call(self, path, interface, method, signature="(a{sv})", args=None):
-        return self.bus.call_sync(SERVICE, path, interface, method,
-                                  self.GLib.Variant(signature, args if args is not None else ({},)), None,
-                                  self.Gio.DBusCallFlags.ALLOW_INTERACTIVE_AUTHORIZATION, 120000, None).unpack()
+        verbs = {(FS, "Mount"): "mount", (FS, "Unmount"): "unmount",
+                 (ENC, "Unlock"): "unlock", (ENC, "Lock"): "lock", (DRIVE, "PowerOff"): "power-off"}
+        relative = path.removeprefix(BASE + "/")
+        kind = "drives" if interface == DRIVE else "block_devices"
+        if (not path.startswith(BASE + "/") or (interface, method) not in verbs
+                or not re.fullmatch(kind + r"/[A-Za-z0-9_]+", relative)):
+            raise ActionError("Unsupported storage operation or object path.")
+        command = [UDISKSCTL, verbs[interface, method], "--object-path", relative]
+        options = dict(stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120, check=True,
+                       env=dict(os.environ, LC_ALL="C"))
+        if method == "Unlock":
+            if signature != "(sa{sv})" or not args or not isinstance(args[0], str) or not args[0]:
+                raise ActionError("Enter a passphrase in the Storage Monitor dialog.")
+            command.extend(["--key-file", "/dev/stdin"])
+            # An anonymous pipe, not a file on disk. Preserve the exact key bytes.
+            result = subprocess.run(command, input=args[0].encode("utf-8"), **options)
+            output = result.stdout.decode("utf-8", "strict")
+            match = re.search(r"^Unlocked [^\n]+ as (/dev/[^\n]+)\.$", output, re.MULTILINE)
+            objects = self.objects()
+            candidates = [p for p, i in objects.items() if match
+                          and decode_path(i.get(BLOCK, {}).get("Device")) == match[1]
+                          and i.get(BLOCK, {}).get("CryptoBackingDevice") == path]
+            if len(candidates) != 1 or objects.get(path, {}).get(ENC, {}).get("CleartextDevice") != candidates[0]:
+                raise ActionError("Unlocked, but the returned mapping could not be verified. Refresh before mounting.")
+            return (candidates[0],)
+        subprocess.run(command, stdin=subprocess.DEVNULL, **options)
+        return ()
 
 
 def guard_object(objects, path, row=None):
@@ -297,7 +317,7 @@ def perform_action(request, backend, probe_fn=probe):
             raise ActionError("Enter a passphrase in the Storage Monitor dialog.")
         cleartext = backend.call(path, ENC, "Unlock", "(sa{sv})", (secret, {}))[0]
         secret = None
-        # Only follow the exact object returned by Unlock. Never guess a mapper name.
+        # Only follow the verified cleartext reported by udisksctl. Never guess a mapper name.
         props = guard_object(backend.objects(), cleartext)
         if props[BLOCK].get("CryptoBackingDevice") != path or FS not in props:
             return "Unlocked. Nested storage must be mounted with your system disk manager."

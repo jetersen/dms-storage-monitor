@@ -101,12 +101,21 @@ class DiscoveryTests(unittest.TestCase):
         next(iter(f["objects"].values()))[b.ENC]["ChildConfiguration"] = [["fstab", {}]]
         self.assertFalse(b.inventory(f["lsblk"], f["findmnt"], f["objects"], stats, lambda p:p)[0]["manageable"])
 
-    def test_probe_survives_missing_busctl_or_gi(self):
+    def test_probe_survives_missing_busctl_or_udisksctl(self):
         f = fixture("framework")
-        with patch.object(b, "command_json", side_effect=[f["lsblk"], f["findmnt"]]), patch.object(b, "read_objects", side_effect=FileNotFoundError), patch.object(b.importlib.util, "find_spec", return_value=None), patch.object(b.os.path, "realpath", side_effect=lambda p:f["aliases"].get(p,p)), patch.object(b.os, "statvfs", side_effect=stats):
+        with patch.object(b, "command_json", side_effect=[f["lsblk"], f["findmnt"]]), patch.object(b, "read_objects", side_effect=FileNotFoundError), patch.object(b.shutil, "which", return_value=None), patch.object(b.os.path, "realpath", side_effect=lambda p:f["aliases"].get(p,p)), patch.object(b.os, "statvfs", side_effect=stats):
             result = b.probe()
         self.assertFalse(result["actionsAvailable"])
         self.assertEqual(len(result["partitions"]), 2)
+
+    def test_action_dependencies_are_cli_and_metadata(self):
+        for cli, metadata in ((True, True), (False, True), (True, False)):
+            f = fixture("framework")
+            with patch.object(b, "command_json", side_effect=[f["lsblk"], f["findmnt"]]), patch.object(b, "read_objects", return_value={b.BASE: {}} if metadata else {}), patch.object(b.shutil, "which", return_value="/bin/udisksctl" if cli else None), patch.object(b.os.path, "realpath", side_effect=lambda p:f["aliases"].get(p,p)), patch.object(b.os, "statvfs", side_effect=stats):
+                result = b.probe()
+            self.assertEqual(result["actionsAvailable"], cli and metadata)
+            self.assertEqual(bool(result["actionDependencyError"]), not (cli and metadata))
+            self.assertEqual(len(result["partitions"]), 2)
 
     def test_discovery_command_failure_is_reported(self):
         with patch.object(b, "probe", side_effect=subprocess.CalledProcessError(1, "lsblk")), patch.object(sys, "argv", ["backend", "probe"]), patch("builtins.print") as output:

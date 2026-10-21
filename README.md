@@ -1,6 +1,6 @@
 # Storage Monitor for Dux Shell
 
-A DankBar widget for mounted filesystem usage, including already unlocked LUKS volumes, LVM and Btrfs subvolumes. Monitoring does not need a passphrase, polkit authorization or Python PyGObject.
+A DankBar widget for mounted filesystem usage, including already unlocked LUKS volumes, LVM and Btrfs subvolumes. Monitoring does not need a passphrase or polkit authorization. Neither monitoring nor storage actions require Python PyGObject.
 
 ![Storage Monitor popout](assets/screenshot.png)
 
@@ -19,9 +19,9 @@ A DankBar widget for mounted filesystem usage, including already unlocked LUKS v
 - Dux Shell 2.0 or newer on Wayland
 - Python 3 and util-linux (`lsblk`, `findmnt`) for monitoring
 - Optional systemd `busctl` and udisks2 for filesystem metadata when `lsblk` cannot supply it, including detection of locked LUKS containers
-- Optional Python PyGObject with Gio, `busctl`, udisks2 and a polkit agent for storage actions
+- Optional udisks2 (`udisksctl`), systemd `busctl` and a polkit agent for storage actions
 
-Missing action dependencies do not prevent monitoring. The Python used by the shell must be able to import `gi` and load Gio; installing a system library alone may not make it available in that Python environment.
+Python uses only its standard library. Disk actions run through `udisksctl`; `busctl` supplies the metadata used to validate device identities and system-volume protections. Missing action dependencies do not prevent monitoring.
 
 ## Installation
 
@@ -35,11 +35,11 @@ When action dependencies are available, simple user-managed filesystems offer **
 
 **Unmount and power off USB** appears once per physical device. Confirm within three seconds to unmount every mounted filesystem on that device and its UDisks sibling drives, then power it off. Any failed unmount, remount, identity change or protected volume prevents power-off. No forced unmount is used. Lock encrypted volumes first; active mapped, LVM, RAID and system-managed layouts cannot be powered off here. Optical media is shown read-only and excluded from usage totals. The dependency footer appears only when action support is missing.
 
-Passphrases travel to the action backend through standard input and then to the system UDisks D-Bus API. They are not placed in commands, environment variables, temporary files or logs. Polkit authorizes the operation; the LUKS passphrase must still be entered in the popout. Cancel the system authorization dialog to cancel an action.
+Passphrases travel to the action backend through standard input, then through a private pipe to `udisksctl unlock --key-file /dev/stdin`. The CLI sends them to the system UDisks D-Bus API. They are not placed in commands, environment variables, temporary files or logs. Polkit authorizes the operation; the LUKS passphrase must still be entered in the popout. Cancel the system authorization dialog to cancel an action.
 
 System mounts, configured system volumes and nested mapped layouts are monitor-only. Unlocking a nested LUKS layout leaves subsequent volume activation and mounting to the system disk manager. Locking never forces an unmount, and a failed unmount prevents locking. If unlock succeeds but mounting fails, refresh to inspect the unlocked device before retrying.
 
-The backend uses the documented UDisks [Encrypted](https://storaged.org/doc/udisks2-api/latest/gdbus-org.freedesktop.UDisks2.Encrypted.html), [Block](https://storaged.org/doc/udisks2-api/latest/gdbus-org.freedesktop.UDisks2.Block.html), [Filesystem](https://storaged.org/doc/udisks2-api/latest/gdbus-org.freedesktop.UDisks2.Filesystem.html) and [Drive](https://storaged.org/doc/udisks2-api/latest/gdbus-org.freedesktop.UDisks2.Drive.html) interfaces. It mounts only the exact cleartext object returned by Unlock. Filesystem support for actions depends on udisks2 and installed filesystem drivers.
+The backend uses the documented UDisks [Encrypted](https://storaged.org/doc/udisks2-api/latest/gdbus-org.freedesktop.UDisks2.Encrypted.html), [Block](https://storaged.org/doc/udisks2-api/latest/gdbus-org.freedesktop.UDisks2.Block.html), [Filesystem](https://storaged.org/doc/udisks2-api/latest/gdbus-org.freedesktop.UDisks2.Filesystem.html) and [Drive](https://storaged.org/doc/udisks2-api/latest/gdbus-org.freedesktop.UDisks2.Drive.html) interfaces. It mounts only the cleartext device reported by `udisksctl`, after verifying the corresponding UDisks object and both directions of its encrypted mapping. Filesystem support for actions depends on udisks2 and installed filesystem drivers.
 
 ## Development checks
 
