@@ -2,7 +2,7 @@
   "id": "storageMonitor",
   "name": "Storage Monitor",
   "description": "Monitor mounted storage partitions with usage bars, and mount or unmount internal and removable drives via udisks2.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "youngshine",
   "icon": "storage",
   "type": "widget",
@@ -10,5 +10,5 @@
   "settings": "./StorageMonitorSettings.qml",
   "capabilities": ["dankbar-widget"],
   "permissions": ["settings_read", "settings_write", "process"],
-  "requires": ">=1.2.0"
+  "requires_dms": ">=2.0.0"
 }

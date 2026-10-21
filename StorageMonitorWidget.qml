@@ -1,6 +1,6 @@
 import QtQuick
 import qs.Common
-import qs.Widgets
+import qs.DCommon.Widgets
 import qs.Modules.Plugins
 import "./services" as Services
 
@@ -37,7 +37,7 @@ PluginComponent {
                 height: Theme.iconSize - 4
                 anchors.verticalCenter: parent.verticalCenter
 
-                DankIcon {
+                DIcon {
                     anchors.centerIn: parent
                     name: "storage"
                     size: Theme.iconSize - 5
@@ -59,7 +59,7 @@ PluginComponent {
         Column {
             spacing: 1
 
-            DankIcon {
+            DIcon {
                 anchors.horizontalCenter: parent.horizontalCenter
                 name: "storage"
                 size: Theme.iconSize - 5

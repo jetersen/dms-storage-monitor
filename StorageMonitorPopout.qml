@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Layouts
 import qs.Common
 import qs.Services
-import qs.Widgets
+import qs.DCommon.Widgets
 import qs.Modules.Plugins
 import "./services" as Services
 
@@ -91,7 +91,7 @@ PopoutComponent {
         implicitHeight: Math.min(contentColumn.implicitHeight, root.maxContentHeight)
         height: implicitHeight
 
-        DankFlickable {
+        DFlickable {
             anchors.fill: parent
             contentWidth: width
             contentHeight: contentColumn.implicitHeight
@@ -120,7 +120,7 @@ PopoutComponent {
                         RowLayout {
                             width: parent.width
                             spacing: Theme.spacingS
-                            DankIcon { name: "storage"; size: 20; color: Theme.primary }
+                            DIcon { name: "storage"; size: 20; color: Theme.primary }
                             StyledText {
                                 Layout.fillWidth: true
                                 text: "All mounted partitions"
@@ -196,7 +196,7 @@ PopoutComponent {
                         Layout.preferredHeight: 28
                         radius: 14
                         color: refreshMouse.containsMouse ? Theme.surfaceContainerHighest : "transparent"
-                        DankIcon {
+                        DIcon {
                             anchors.centerIn: parent
                             name: "refresh"
                             size: 15
@@ -247,7 +247,7 @@ PopoutComponent {
                                     Layout.preferredHeight: 34
                                     radius: 17
                                     color: modelData.mounted ? Theme.primaryContainer : Theme.surfaceContainerHigh
-                                    DankIcon {
+                                    DIcon {
                                         anchors.centerIn: parent
                                         name: root.fsIconName(modelData)
                                         size: 18

@@ -1,4 +1,4 @@
-# Storage Monitor for DankMaterialShell
+# Storage Monitor for Dux Shell
 
 A DankBar widget that shows total storage usage and lists every mountable partition — internal NVMe/SATA drives and removable media alike — with per-partition usage bars and mount/unmount actions powered by [udisks2](https://www.freedesktop.org/wiki/Software/udisks/).
 
@@ -17,7 +17,7 @@ A DankBar widget that shows total storage usage and lists every mountable partit
 
 ## Requirements
 
-- DankMaterialShell 1.2 or newer
+- Dux Shell 2.0 or newer
 - Wayland
 - `udisks2` with a polkit authentication agent (e.g. `hyprpolkitagent`, `polkit-kde-agent`)
 
