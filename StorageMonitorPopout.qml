@@ -10,7 +10,7 @@ PopoutComponent {
     id: root
 
     headerText: "Storage Monitor"
-    detailsText: root.storage.probing ? "Scanning disks…" : totalDescription()
+    detailsText: totalDescription()
     showCloseButton: true
 
     readonly property var storage: Services.StorageService
@@ -18,6 +18,8 @@ PopoutComponent {
     property string pendingUnmount: ""
     property int confirmCountdown: 0
     property string pendingVerb: "unmount"
+    property string pendingPowerOff: ""
+    property string pendingPowerOffIdentity: ""
     property var unlockTarget: null
 
     function totalDescription() {
@@ -34,6 +36,8 @@ PopoutComponent {
     }
 
     function usageText(partition) {
+        if (partition.deviceType === "rom")
+            return "Read-only optical media";
         if (partition.locked)
             return "Locked · " + root.storage.formatBytes(partition.size);
         if (partition.mounted && !partition.usageKnown)
@@ -44,6 +48,8 @@ PopoutComponent {
     }
 
     function fsIconName(partition) {
+        if (partition.deviceType === "rom")
+            return "album";
         const fs = partition.fstype;
         if (fs === "ntfs" || fs === "exfat" || fs === "vfat" || fs === "fat32")
             return "usb";
@@ -93,6 +99,35 @@ PopoutComponent {
             }
         } else {
             root.storage.mountPartition(partition);
+        }
+    }
+
+    Timer {
+        id: powerOffConfirmTimer
+        interval: 3000
+        onTriggered: root.pendingPowerOff = ""
+    }
+
+    function isPowerOffRepresentative(partition) {
+        if (!root.storage.actionsAvailable || !partition.canPowerOff || !partition.physicalGroup)
+            return false;
+        const list = root.storage.visiblePartitions.filter(p => root.storage.showUnmounted || p.mounted);
+        const first = list.find(p => p.physicalGroup === partition.physicalGroup);
+        return first && first.path === partition.path;
+    }
+
+    function handlePowerOff(partition) {
+        if (root.storage.busyAction || root.storage.probing || !root.storage.actionsAvailable || !partition.canPowerOff)
+            return;
+        const identity = JSON.stringify([partition.identity, partition.drivePath, partition.powerOffIdentity]);
+        if (root.pendingPowerOff === partition.physicalGroup && root.pendingPowerOffIdentity === identity) {
+            root.pendingPowerOff = "";
+            powerOffConfirmTimer.stop();
+            root.storage.powerOffDrive(partition);
+        } else {
+            root.pendingPowerOff = partition.physicalGroup;
+            root.pendingPowerOffIdentity = identity;
+            powerOffConfirmTimer.restart();
         }
     }
 
@@ -337,19 +372,6 @@ PopoutComponent {
                                             font.weight: Font.Bold
                                             color: Theme.surfaceText
                                         }
-                                        Rectangle {
-                                            height: 18
-                                            radius: 4
-                                            color: Theme.surfaceContainerHigh
-                                            visible: root.storage.showLabels && modelData.label.length > 0
-                                            StyledText {
-                                                anchors.centerIn: parent
-                                                text: modelData.label
-                                                font.pixelSize: 9
-                                                color: Theme.surfaceVariantText
-                                            }
-                                            width: modelData.label.length * 6 + 12
-                                        }
                                     }
 
                                     StyledText {
@@ -365,7 +387,6 @@ PopoutComponent {
                                     visible: modelData.manageable && root.storage.actionsAvailable
                                     Layout.preferredWidth: {
                                         if ((root.pendingUnmount === modelData.path && root.pendingVerb === "unmount")) return 96;
-                                        if (root.storage.busyAction) return 92;
                                         return 76;
                                     }
                                     Layout.preferredHeight: 30
@@ -373,8 +394,6 @@ PopoutComponent {
                                     color: {
                                         if ((root.pendingUnmount === modelData.path && root.pendingVerb === "unmount"))
                                             return Theme.error;
-                                        if (root.storage.busyAction)
-                                            return Theme.surfaceContainerHigh;
                                         if (!modelData.mounted)
                                             return actionButtonMouse.containsMouse ? Theme.primaryHover : Theme.primary;
                                         return actionButtonMouse.containsMouse ? Theme.errorHover : Theme.surfaceContainerHigh;
@@ -383,7 +402,7 @@ PopoutComponent {
 
                                     StyledText {
                                         anchors.centerIn: parent
-                                        visible: !root.storage.busyAction && (root.pendingUnmount !== modelData.path || root.pendingVerb !== "unmount") && modelData.mounted
+                                        visible: (root.pendingUnmount !== modelData.path || root.pendingVerb !== "unmount") && modelData.mounted
                                         text: "Unmount"
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.weight: Font.Bold
@@ -392,25 +411,16 @@ PopoutComponent {
 
                                     StyledText {
                                         anchors.centerIn: parent
-                                        visible: !root.storage.busyAction && (root.pendingUnmount === modelData.path && root.pendingVerb === "unmount")
+                                        visible: (root.pendingUnmount === modelData.path && root.pendingVerb === "unmount")
                                         text: "Confirm? " + root.confirmCountdown
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.weight: Font.Bold
-                                        color: Theme.errorText
+                                        color: Theme.onError
                                     }
 
                                     StyledText {
                                         anchors.centerIn: parent
-                                        visible: root.storage.busyAction
-                                        text: "Working…"
-                                        font.pixelSize: Theme.fontSizeSmall
-                                        font.weight: Font.Bold
-                                        color: Theme.surfaceVariantText
-                                    }
-
-                                    StyledText {
-                                        anchors.centerIn: parent
-                                        visible: !root.storage.busyAction && (root.pendingUnmount !== modelData.path || root.pendingVerb !== "unmount") && !modelData.mounted
+                                        visible: (root.pendingUnmount !== modelData.path || root.pendingVerb !== "unmount") && !modelData.mounted
                                         text: modelData.locked ? "Unlock" : "Mount"
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.weight: Font.Bold
@@ -445,6 +455,7 @@ PopoutComponent {
 
                             // Progress bar
                             RowLayout {
+                                visible: modelData.deviceType !== "rom"
                                 width: parent.width
                                 spacing: Theme.spacingM
 
@@ -468,6 +479,20 @@ PopoutComponent {
                                     color: Theme.surfaceText
                                 }
                             }
+
+                            DButton {
+                                visible: root.isPowerOffRepresentative(modelData)
+                                text: root.pendingPowerOff === modelData.physicalGroup ? "Confirm removal?" : "Unmount and power off USB"
+                                enabled: !root.storage.busyAction && !root.storage.probing
+                                onClicked: root.handlePowerOff(modelData)
+                            }
+
+                            StyledText {
+                                visible: modelData.deviceType === "rom"
+                                text: "Read-only optical media"
+                                font.pixelSize: Theme.fontSizeSmall
+                                color: Theme.surfaceVariantText
+                            }
                         }
                     }
                 }
@@ -483,10 +508,11 @@ PopoutComponent {
                 Item {
                     width: parent.width
                     height: 24
+                    visible: !root.storage.actionsAvailable
 
                     StyledText {
                         anchors.fill: parent
-                        text: root.storage.actionsAvailable ? "Storage actions use system authorization (udisks2)" : "Monitoring only · storage actions need Python Gio"
+                        text: "Monitoring only · storage actions need Python Gio"
                         wrapMode: Text.WordWrap
                         font.pixelSize: 10
                         color: Theme.surfaceVariantText

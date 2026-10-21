@@ -12,6 +12,7 @@ A DankBar widget for mounted filesystem usage, including already unlocked LUKS v
 - Mounted volumes remain marked mounted if usage cannot be read
 - Labels, system partition filtering and automatic refresh
 - Optional mount, unmount, unlock and lock actions for simple user-managed volumes
+- Confirmed whole-device removal for USB drives, including their physical siblings
 
 ## Requirements
 
@@ -32,21 +33,24 @@ Click the storage icon to see filesystems, mount points and usage. Already unloc
 
 When action dependencies are available, simple user-managed filesystems offer **Mount** or **Unmount**. Unmount requires a second click within three seconds. Locked LUKS containers offer **Unlock**, followed by a password field in the popout. **Unmount and lock** also requires confirmation and is available only for a direct encrypted filesystem.
 
+**Unmount and power off USB** appears once per physical device. Confirm within three seconds to unmount every mounted filesystem on that device and its UDisks sibling drives, then power it off. Any failed unmount, remount, identity change or protected volume prevents power-off. No forced unmount is used. Lock encrypted volumes first; active mapped, LVM, RAID and system-managed layouts cannot be powered off here. Optical media is shown read-only and excluded from usage totals. The dependency footer appears only when action support is missing.
+
 Passphrases travel to the action backend through standard input and then to the system UDisks D-Bus API. They are not placed in commands, environment variables, temporary files or logs. Polkit authorizes the operation; the LUKS passphrase must still be entered in the popout. Cancel the system authorization dialog to cancel an action.
 
 System mounts, configured system volumes and nested mapped layouts are monitor-only. Unlocking a nested LUKS layout leaves subsequent volume activation and mounting to the system disk manager. Locking never forces an unmount, and a failed unmount prevents locking. If unlock succeeds but mounting fails, refresh to inspect the unlocked device before retrying.
 
-The backend uses the documented UDisks [Encrypted](https://storaged.org/doc/udisks2-api/latest/gdbus-org.freedesktop.UDisks2.Encrypted.html), [Block](https://storaged.org/doc/udisks2-api/latest/gdbus-org.freedesktop.UDisks2.Block.html) and [Filesystem](https://storaged.org/doc/udisks2-api/latest/gdbus-org.freedesktop.UDisks2.Filesystem.html) interfaces. It mounts only the exact cleartext object returned by Unlock. Filesystem support for actions depends on udisks2 and installed filesystem drivers.
+The backend uses the documented UDisks [Encrypted](https://storaged.org/doc/udisks2-api/latest/gdbus-org.freedesktop.UDisks2.Encrypted.html), [Block](https://storaged.org/doc/udisks2-api/latest/gdbus-org.freedesktop.UDisks2.Block.html), [Filesystem](https://storaged.org/doc/udisks2-api/latest/gdbus-org.freedesktop.UDisks2.Filesystem.html) and [Drive](https://storaged.org/doc/udisks2-api/latest/gdbus-org.freedesktop.UDisks2.Drive.html) interfaces. It mounts only the exact cleartext object returned by Unlock. Filesystem support for actions depends on udisks2 and installed filesystem drivers.
 
 ## Development checks
 
 ```sh
 python3 -m unittest discover -s tests -v
+node tests/test_power_off_ui.mjs
 python3 services/storage_backend.py probe
 python3 tests/check_qml.py /path/to/installed/share/quickshell/dms
 ```
 
-The QML check requires a Wayland connection. It compiles all plugin components against the supplied installed Dux files and runs only the read-only monitoring service in a separate shell without windows. It does not load the desktop shell or invoke disk actions. Action regression tests use simulated D-Bus objects and calls; live unlock/mount/unmount/lock validation requires a disposable volume and separate authorization.
+The QML check requires a Wayland connection. It compiles all plugin components against the supplied installed Dux files and runs only the read-only monitoring service in a separate shell without windows. It does not load the desktop shell or invoke disk actions. Action regression tests use simulated D-Bus objects and calls; live unlock/mount/unmount/lock/power-off validation requires a disposable volume and separate authorization.
 
 ## License
 

@@ -93,16 +93,18 @@ Singleton {
     function mountPartition(partition) { beginAction("mount", partition); }
     function unmountPartition(partition) { beginAction("unmount", partition); }
     function lockPartition(partition) { beginAction("lock", partition); }
+    function powerOffDrive(partition) { beginAction("power-off", partition); }
     function unlockPartition(partition, passphrase) { beginAction("unlock", partition, passphrase); }
 
     function beginAction(verb, partition, passphrase) {
-        if (busyAction || probing || !actionsAvailable || !partition || !partition.manageable)
+        if (busyAction || probing || !actionsAvailable || !partition || !(verb === "power-off" ? partition.canPowerOff : partition.manageable))
             return;
         busyAction = true;
         lastError = "";
         lastActionMessage = "";
         _actionRequest = JSON.stringify({verb: verb, identity: partition.identity,
-            objectPath: partition.objectPath, passphrase: passphrase || ""}) + "\n";
+            objectPath: partition.objectPath, drivePath: partition.drivePath,
+            powerOffIdentity: partition.powerOffIdentity, passphrase: passphrase || ""}) + "\n";
         actionProc.running = true;
     }
 
@@ -128,7 +130,7 @@ Singleton {
         const partitions = root.visiblePartitions;
         for (let i = 0; i < partitions.length; i++) {
             const p = partitions[i];
-            if (!p.mounted || !p.usageKnown)
+            if (!p.mounted || !p.usageKnown || p.deviceType === "rom")
                 continue;
             used += p.used;
             size += p.size;

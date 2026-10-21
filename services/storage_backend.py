@@ -9,6 +9,7 @@ import sys
 
 PREFIX = "org.freedesktop.UDisks2."
 BLOCK, FS, ENC = (PREFIX + name for name in ("Block", "Filesystem", "Encrypted"))
+DRIVE = PREFIX + "Drive"
 SERVICE = "org.freedesktop.UDisks2"
 BASE = "/org/freedesktop/UDisks2"
 SYSTEM_PATHS = ("/boot", "/efi", "/home", "/nix", "/usr", "/var", "/srv", "/etc", "/opt", "/root")
@@ -40,6 +41,45 @@ def read_objects():
 
 def protected_mount(path):
     return path == "/" or any(path == p or path.startswith(p + "/") for p in SYSTEM_PATHS)
+
+
+def power_off_state(objects, drive_path):
+    """Validate the entire physical device, including UDisks sibling drives."""
+    drive = objects.get(drive_path, {}).get(DRIVE, {})
+    if not drive:
+        raise ActionError("Drive is unavailable. Refresh first.")
+    sibling = drive.get("SiblingId")
+    drives = {p: i[DRIVE] for p, i in objects.items() if DRIVE in i
+              and (p == drive_path or (sibling and i[DRIVE].get("SiblingId") == sibling))}
+    if any(not d.get("CanPowerOff") or d.get("ConnectionBus") != "usb" or d.get("Configuration") or not d.get("TimeDetected")
+           for d in drives.values()):
+        raise ActionError("This physical device cannot be safely powered off here.")
+    blocks = {p: i for p, i in objects.items() if i.get(BLOCK, {}).get("Drive") in drives}
+    if not blocks:
+        raise ActionError("Drive has no available block devices.")
+    for path, props in objects.items():
+        block = props.get(BLOCK, {})
+        if block.get("CryptoBackingDevice") in blocks:
+            raise ActionError("Lock encrypted volumes before powering off this device.")
+        if props.get(PREFIX + "Partition", {}).get("Table") in blocks and path not in blocks:
+            raise ActionError("Drive membership is incomplete. Refresh first.")
+    for path, props in blocks.items():
+        guard_object(objects, path)
+        block = props[BLOCK]
+        if props.get(PREFIX + "Partition", {}).get("Table") not in (None, "/", *blocks):
+            raise ActionError("Drive membership is incomplete. Refresh first.")
+        if (block.get("IdType") in MEMBERS - {"crypto_LUKS"}
+                or block.get("MDRaid", "/") != "/" or block.get("MDRaidMember", "/") != "/"
+                or PREFIX + "Block.LVM2" in props or PREFIX + "PhysicalVolume" in props
+                or props.get(ENC, {}).get("CleartextDevice", "/") != "/"):
+            raise ActionError("Nested or active storage must be managed externally.")
+    # Mount state is deliberately excluded: unmounting must not change identity.
+    return {
+        "drives": [[p] + [d.get(k) for k in ("Id", "Serial", "WWN", "TimeDetected", "SiblingId")]
+                   for p, d in sorted(drives.items())],
+        "blocks": [[p] + [i[BLOCK].get(k) for k in ("DeviceNumber", "Size", "IdUUID", "IdType")]
+                   for p, i in sorted(blocks.items())],
+    }
 
 
 def inventory(lsblk, findmnt, objects=None, statvfs=os.statvfs, realpath=os.path.realpath):
@@ -97,9 +137,30 @@ def inventory(lsblk, findmnt, objects=None, statvfs=os.statvfs, realpath=os.path
     for key, node in nodes.items():
         if node.get("type") == "crypt":
             encrypted.update(parents[key])
+
+    def drive_for(key):
+        paths = {udisks.get(k, ("", {}))[1].get(BLOCK, {}).get("Drive")
+                 for k in ancestors(key) | {key}} - {None, "", "/"}
+        return next(iter(paths)) if len(paths) == 1 else ""
+
+    power_info = {}
+    for drive_path in {drive_for(k) for k in nodes} - {""}:
+        try:
+            state = power_off_state(objects, drive_path)
+            group = {d[0] for d in state["drives"]}
+            keys = {k for k in nodes if drive_for(k) in group}
+            if (any(nodes[k].get("type") not in ("disk", "part", "rom")
+                    or (nodes[k].get("fstype") in MEMBERS and k not in encrypted)
+                    or any(protected_mount(m["target"]) for m in mounts[k]) for k in keys)
+                    or {udisks.get(k, ("", {}))[0] for k in keys} != {b[0] for b in state["blocks"]}):
+                continue
+            drive = objects[drive_path][DRIVE]
+            power_info[drive_path] = ("sibling:" + drive["SiblingId"] if drive.get("SiblingId") else drive_path, state)
+        except ActionError:
+            continue
     result = []
     for key, node in nodes.items():
-        if node.get("type") in ("loop", "rom"):
+        if node.get("type") == "loop":
             continue
         children = {child for child in nodes if key in parents[child]}
         is_container = key in encrypted
@@ -120,8 +181,12 @@ def inventory(lsblk, findmnt, objects=None, statvfs=os.statvfs, realpath=os.path
             block = props.get(BLOCK, {})
             unsafe |= bool(block.get("Configuration") or block.get("HintIgnore") or block.get("HintSystem") or props.get(ENC, {}).get("ChildConfiguration"))
         manageable = bool(path and simple and not unsafe and not children)
+        drive_path = drive_for(key)
+        physical_group, power_identity = power_info.get(drive_path, ("", None))
         row = dict(name=node["name"], path="/dev/" + key, size=int(node.get("size") or 0),
-                   fstype=fstype, partTypeName=node.get("parttypename") or "", label=node.get("label") or "",
+                   deviceType=node.get("type") or "", drivePath=drive_path,
+                   physicalGroup=physical_group, canPowerOff=bool(power_identity), powerOffIdentity=power_identity,
+                   fstype=fstype, partTypeName=node.get("parttypename") or "", label=node.get("label") or node.get("partlabel") or "",
                    mountpoint=entries[0]["target"] if entries else "", mountpoints=[m["target"] for m in entries],
                    mounted=bool(entries), usageKnown=False, used=0, avail=0, usePercent=0,
                    encrypted=is_container or bool(backing), locked=is_container, manageable=manageable,
@@ -149,7 +214,7 @@ def inventory(lsblk, findmnt, objects=None, statvfs=os.statvfs, realpath=os.path
 
 def probe():
     lsblk = command_json(["lsblk", "--json", "--bytes", "--tree", "--output",
-                          "NAME,KNAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS,LABEL,MAJ:MIN,UUID,PARTTYPENAME"])
+                          "NAME,KNAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS,LABEL,PARTLABEL,MAJ:MIN,UUID,PARTTYPENAME"])
     mounts = command_json(["findmnt", "--json", "--output", "SOURCE,TARGET,FSTYPE,MAJ:MIN"])
     try:
         objects = read_objects()
@@ -163,9 +228,9 @@ class ActionError(Exception):
     pass
 
 
-def current_row(request, probe_fn):
+def current_row(request, probe_fn, power_off=False):
     row = next((p for p in probe_fn()["partitions"] if p["identity"] == request.get("identity")), None)
-    if not row or not row["manageable"] or row["objectPath"] != request.get("objectPath"):
+    if not row or not row["canPowerOff" if power_off else "manageable"] or row["objectPath"] != request.get("objectPath"):
         raise ActionError("Device changed or is managed by the system. Refresh and try again.")
     return row
 
@@ -211,6 +276,8 @@ def guard_object(objects, path, row=None):
 
 def perform_action(request, backend, probe_fn=probe):
     verb = request.get("verb")
+    if verb == "power-off":
+        return perform_power_off(request, backend, probe_fn)
     if verb not in ("mount", "unmount", "unlock", "lock"):
         raise ActionError("Unsupported storage operation.")
     row = current_row(request, probe_fn)
@@ -260,6 +327,30 @@ def perform_action(request, backend, probe_fn=probe):
         backend.call(backing, ENC, "Lock")
         return "Unmounted and locked."
     return "Unmounted."
+
+
+def perform_power_off(request, backend, probe_fn):
+    def validate():
+        row = current_row(request, probe_fn, power_off=True)
+        objects = backend.objects()
+        state = power_off_state(objects, row["drivePath"])
+        if (row["drivePath"] != request.get("drivePath")
+                or state != request.get("powerOffIdentity") or row["powerOffIdentity"] != state):
+            raise ActionError("Physical device changed. Refresh and confirm removal again.")
+        guard_object(objects, row["objectPath"], row)
+        return row, objects, state
+
+    row, objects, state = validate()
+    members = [b[0] for b in state["blocks"]]
+    for path in members:
+        row, objects, _ = validate()
+        if objects[path].get(FS, {}).get("MountPoints"):
+            backend.call(path, FS, "Unmount")  # No force; any failure aborts power-off.
+    row, objects, _ = validate()
+    if any(objects[p].get(FS, {}).get("MountPoints") for p in members):
+        raise ActionError("A filesystem was remounted; device was not powered off.")
+    backend.call(row["drivePath"], DRIVE, "PowerOff")
+    return "Unmounted and powered off."
 
 
 def main():
