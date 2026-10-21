@@ -14,10 +14,9 @@ Singleton {
     property bool busyAction: false
     property string lastError: ""
     property string lastActionMessage: ""
-    property string lastActionLog: ""
 
-    // Probed data
-    property var partitions: [] // [{name, path, size, used, avail, usePercent, fstype, mountpoint, label, mounted}]
+    // Mounted state and usage availability are independent.
+    property var partitions: []
 
     // Settings supplied by the widget
     property int refreshInterval: 60
@@ -51,7 +50,9 @@ Singleton {
         return systemPartitionLabels.indexOf(label) >= 0;
     }
 
-    property var _dfData: ({}) // path -> {used, avail, capacity}
+    readonly property string backendPath: decodeURIComponent(Qt.resolvedUrl("storage_backend.py").toString()).replace(/^file:\/\//, "")
+    property bool actionsAvailable: false
+    property string _actionRequest: ""
 
     Timer {
         id: refreshTimer
@@ -63,35 +64,45 @@ Singleton {
 
     Component.onCompleted: refresh()
 
+    // Failed-to-start processes do not necessarily emit exited.
+    Timer {
+        interval: 1000
+        repeat: true
+        running: root.probing || root.busyAction
+        onTriggered: {
+            if (root.probing && !probeProc.running) {
+                root.probing = false;
+                root.lastError = "Could not start storage discovery. Check Python 3.";
+            }
+            if (root.busyAction && !actionProc.running) {
+                root._actionRequest = "";
+                root.busyAction = false;
+                root.lastError = "Could not start storage action. Check Python 3.";
+            }
+        }
+    }
+
     function refresh() {
-        if (lsblkProc.running || dfProc.running)
+        if (probeProc.running || busyAction)
             return;
         probing = true;
         lastError = "";
-        _dfData = ({});
-        lsblkProc.running = true;
-        dfProc.running = true;
+        probeProc.running = true;
     }
 
-    function mountPartition(partition) {
-        if (busyAction || !partition || partition.mounted)
+    function mountPartition(partition) { beginAction("mount", partition); }
+    function unmountPartition(partition) { beginAction("unmount", partition); }
+    function lockPartition(partition) { beginAction("lock", partition); }
+    function unlockPartition(partition, passphrase) { beginAction("unlock", partition, passphrase); }
+
+    function beginAction(verb, partition, passphrase) {
+        if (busyAction || probing || !actionsAvailable || !partition || !partition.manageable)
             return;
-        _beginAction("mount", partition.path);
-    }
-
-    function unmountPartition(partition) {
-        if (busyAction || !partition || !partition.mounted)
-            return;
-        _beginAction("unmount", partition.path);
-    }
-
-    function _beginAction(verb, path) {
         busyAction = true;
+        lastError = "";
         lastActionMessage = "";
-        lastActionLog = "";
-        actionProc.command = ["udisksctl", verb, "-b", path];
-        actionWatchdog.interval = 20000;
-        actionWatchdog.restart();
+        _actionRequest = JSON.stringify({verb: verb, identity: partition.identity,
+            objectPath: partition.objectPath, passphrase: passphrase || ""}) + "\n";
         actionProc.running = true;
     }
 
@@ -113,149 +124,68 @@ Singleton {
     function totalStats() {
         let used = 0;
         let size = 0;
+        let known = 0;
         const partitions = root.visiblePartitions;
         for (let i = 0; i < partitions.length; i++) {
             const p = partitions[i];
-            if (!p.mounted)
+            if (!p.mounted || !p.usageKnown)
                 continue;
             used += p.used;
             size += p.size;
+            known++;
         }
         const percent = size > 0 ? Math.round((used / size) * 100) : 0;
-        return { used: used, size: size, percent: percent };
+        return { used: used, size: size, percent: percent, known: known };
     }
 
     Process {
-        id: lsblkProc
-        command: ["env", "LC_ALL=C", "lsblk", "-J", "-b", "-o", "NAME,KNAME,TYPE,SIZE,FSTYPE,MOUNTPOINT,LABEL,PARTTYPENAME"]
-        running: false
+        id: probeProc
+        command: ["python3", root.backendPath, "probe"]
         stdout: StdioCollector {}
         stderr: StdioCollector {}
         onExited: (exitCode, exitStatus) => {
-            if (exitCode !== 0) {
-                root.lastError = "lsblk failed: " + stderr.text.trim();
-                root.probing = false;
-                return;
-            }
-            let parsed = null;
+            root.probing = false;
             try {
-                parsed = JSON.parse(stdout.text);
+                const data = JSON.parse(stdout.text);
+                if (exitCode !== 0 || data.error) {
+                    root.lastError = data.error || "Storage discovery failed.";
+                    return;
+                }
+                root.partitions = data.partitions;
+                root.actionsAvailable = data.actionsAvailable;
             } catch (e) {
-                root.lastError = "Could not parse lsblk output.";
-                root.probing = false;
-                return;
-            }
-            const result = [];
-            const devices = parsed.blockdevices || [];
-            for (let i = 0; i < devices.length; i++)
-                collectPartitions(devices[i], result);
-            root.partitions = result;
-            root._finishIfDone();
-        }
-    }
-
-    Process {
-        id: dfProc
-        command: ["df", "-B1", "-P", "-x", "squashfs", "-x", "tmpfs", "-x", "overlay", "-x", "devtmpfs", "-x", "efivarfs", "-x", "proc", "-x", "sysfs", "-x", "cgroup2", "-x", "zfs"]
-        running: false
-        stdout: StdioCollector {}
-        stderr: StdioCollector {}
-        onExited: (exitCode, exitStatus) => {
-            const lines = stdout.text.trim().split("\n");
-            for (let i = 1; i < lines.length; i++) {
-                const parts = lines[i].trim().split(/\s+/);
-                if (parts.length < 6)
-                    continue;
-                const path = parts[0];
-                const used = parseInt(parts[2], 10);
-                const avail = parseInt(parts[3], 10);
-                const capacity = parseInt(parts[4].replace("%", ""), 10);
-                root._dfData[path] = { used: used, avail: avail, capacity: capacity };
-            }
-            root._finishIfDone();
-        }
-    }
-
-    function _finishIfDone() {
-        if (lsblkProc.running || dfProc.running)
-            return;
-        probing = false;
-        const merged = [];
-        for (let i = 0; i < partitions.length; i++) {
-            const p = partitions[i];
-            const info = _dfData["/dev/" + p.name] || _dfData[p.name];
-            if (info) {
-                p.used = info.used;
-                p.avail = info.avail;
-                p.usePercent = info.capacity;
-                p.mounted = true;
-            } else {
-                p.used = 0;
-                p.avail = p.size;
-                p.usePercent = 0;
-                p.mounted = false;
-            }
-            merged.push(p);
-        }
-        root.partitions = merged;
-    }
-
-    function collectPartitions(device, result) {
-        if (!device)
-            return;
-        const type = device.type || "";
-        const fstype = device.fstype || "";
-        if (type === "part" || (type === "disk" && fstype && fstype !== "swap")) {
-            if (fstype && fstype !== "swap") {
-                result.push({
-                    name: device.name || device.kname || "",
-                    path: "/dev/" + (device.kname || device.name),
-                    size: Number(device.size || 0),
-                    fstype: fstype,
-                    partTypeName: device.parttypename || "",
-                    mountpoint: device.mountpoint || "",
-                    label: device.label || "",
-                    mounted: !!device.mountpoint,
-                    used: 0,
-                    avail: 0,
-                    usePercent: 0
-                });
+                root.lastError = "Storage discovery failed. Check Python 3, lsblk and findmnt.";
             }
         }
-        const children = device.children || [];
-        for (let i = 0; i < children.length; i++)
-            collectPartitions(children[i], result);
     }
 
     Process {
         id: actionProc
-        running: false
+        command: ["python3", root.backendPath, "action"]
+        stdinEnabled: true
+        // Action output is deliberately sanitized by the backend.
         stdout: StdioCollector {}
-        stderr: StdioCollector {}
-        onExited: (exitCode, exitStatus) => {
-            actionWatchdog.stop();
-            root.busyAction = false;
-            root.lastActionLog = (stdout.text + " " + stderr.text).trim();
-            if (exitCode === 0) {
-                root.lastActionMessage = "OK";
-                root.refresh();
-            } else {
-                root.lastError = stderr.text.trim() || "Storage operation failed.";
-                ToastService.showError("Storage Monitor", root.lastError);
-            }
+        onStarted: {
+            actionProc.write(root._actionRequest);
+            root._actionRequest = "";
         }
-    }
-
-    Timer {
-        id: actionWatchdog
-        interval: 20000
-        repeat: false
-        onTriggered: {
-            if (!root.busyAction)
-                return;
+        onExited: (exitCode, exitStatus) => {
+            root._actionRequest = "";
             root.busyAction = false;
-            root.lastError = "Storage operation timed out (udisks2 did not respond). Check the authorization prompt.";
-            ToastService.showError("Storage Monitor", root.lastError);
+            try {
+                const data = JSON.parse(stdout.text);
+                if (exitCode !== 0 || data.error)
+                    root.lastError = data.error || "Storage operation failed.";
+                else
+                    root.lastActionMessage = data.message || "OK";
+            } catch (e) {
+                root.lastError = "Storage operation failed. Check Python 3 and system authorization.";
+            }
+            if (root.lastError)
+                ToastService.showError("Storage Monitor", root.lastError);
+            // Keep the error while refreshing the actual state, including partial success.
+            root.probing = true;
+            probeProc.running = true;
         }
     }
 }

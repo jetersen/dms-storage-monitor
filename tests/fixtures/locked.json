@@ -1,0 +1,48 @@
+{
+  "lsblk": {
+    "blockdevices": [
+      {
+        "name": "sdb1",
+        "kname": "sdb1",
+        "type": "part",
+        "size": 10000000,
+        "fstype": "crypto_LUKS",
+        "mountpoints": [],
+        "label": null,
+        "uuid": null,
+        "maj:min": "8:1"
+      }
+    ]
+  },
+  "findmnt": {
+    "filesystems": []
+  },
+  "objects": {
+    "/encrypted": {
+      "org.freedesktop.UDisks2.Block": {
+        "Device": [
+          47,
+          100,
+          101,
+          118,
+          47,
+          115,
+          100,
+          98,
+          49,
+          0
+        ],
+        "DeviceNumber": 2049,
+        "Size": 10000000,
+        "HintSystem": false,
+        "Configuration": [],
+        "IdType": "crypto_LUKS"
+      },
+      "org.freedesktop.UDisks2.Encrypted": {
+        "CleartextDevice": "/",
+        "ChildConfiguration": []
+      }
+    }
+  },
+  "aliases": {}
+}

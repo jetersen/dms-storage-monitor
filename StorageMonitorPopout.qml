@@ -17,9 +17,13 @@ PopoutComponent {
     property int maxContentHeight: 560
     property string pendingUnmount: ""
     property int confirmCountdown: 0
+    property string pendingVerb: "unmount"
+    property var unlockTarget: null
 
     function totalDescription() {
         const stats = root.storage.totalStats();
+        if (stats.known === 0)
+            return "No filesystem usage available";
         return root.storage.formatBytes(stats.used) + " used of " + root.storage.formatBytes(stats.size) + " · " + stats.percent + "%";
     }
 
@@ -30,6 +34,10 @@ PopoutComponent {
     }
 
     function usageText(partition) {
+        if (partition.locked)
+            return "Locked · " + root.storage.formatBytes(partition.size);
+        if (partition.mounted && !partition.usageKnown)
+            return "Mounted · usage unavailable";
         if (!partition.mounted)
             return "Not mounted · " + root.storage.formatBytes(partition.size);
         return root.storage.formatBytes(partition.used) + " / " + root.storage.formatBytes(partition.size) + " · " + partition.usePercent + "%";
@@ -39,7 +47,7 @@ PopoutComponent {
         const fs = partition.fstype;
         if (fs === "ntfs" || fs === "exfat" || fs === "vfat" || fs === "fat32")
             return "usb";
-        return "storage";
+        return partition.encrypted ? "lock" : "storage";
     }
 
     function partitionColor(partition) {
@@ -53,18 +61,33 @@ PopoutComponent {
     }
 
     Component.onCompleted: storage.refresh()
+    onVisibleChanged: {
+        if (!visible) {
+            passphraseField.clear();
+            root.unlockTarget = null;
+        }
+    }
 
-    function handleAction(partition) {
-        if (root.storage.busyAction)
+    function handleAction(partition, verb) {
+        if (root.storage.busyAction || root.storage.probing || !partition.manageable)
             return;
-        if (partition.mounted) {
-            if (root.pendingUnmount === partition.path) {
+        if (partition.locked) {
+            root.unlockTarget = partition;
+            return;
+        }
+        verb = verb || "unmount";
+        if (partition.mounted || verb === "lock") {
+            if (root.pendingUnmount === partition.path && root.pendingVerb === verb) {
                 root.pendingUnmount = "";
                 confirmResetTimer.stop();
                 root.confirmCountdown = 0;
-                root.storage.unmountPartition(partition);
+                if (verb === "lock")
+                    root.storage.lockPartition(partition);
+                else
+                    root.storage.unmountPartition(partition);
             } else {
                 root.pendingUnmount = partition.path;
+                root.pendingVerb = verb;
                 root.confirmCountdown = 3;
                 confirmResetTimer.restart();
             }
@@ -123,13 +146,13 @@ PopoutComponent {
                             DIcon { name: "storage"; size: 20; color: Theme.primary }
                             StyledText {
                                 Layout.fillWidth: true
-                                text: "All mounted partitions"
+                                text: "Mounted filesystems with known usage"
                                 font.pixelSize: Theme.fontSizeMedium
                                 font.weight: Font.Bold
                                 color: Theme.surfaceText
                             }
                             StyledText {
-                                text: root.storage.totalStats().percent + "%"
+                                text: root.storage.totalStats().known > 0 ? root.storage.totalStats().percent + "%" : "—"
                                 font.pixelSize: Theme.fontSizeMedium
                                 font.weight: Font.Bold
                                 color: root.storage.totalStats().percent >= 90 ? Theme.error : Theme.primary
@@ -152,7 +175,7 @@ PopoutComponent {
 
                         StyledText {
                             width: parent.width
-                            text: root.storage.formatBytes(root.storage.totalStats().used) + " used · " + root.storage.formatBytes(root.storage.totalStats().size - root.storage.totalStats().used) + " free"
+                            text: root.storage.totalStats().known > 0 ? root.storage.formatBytes(root.storage.totalStats().used) + " used · " + root.storage.formatBytes(root.storage.totalStats().size - root.storage.totalStats().used) + " free" : "Usage unavailable"
                             font.pixelSize: Theme.fontSizeSmall
                             color: Theme.surfaceVariantText
                         }
@@ -175,6 +198,53 @@ PopoutComponent {
                         font.pixelSize: Theme.fontSizeSmall
                         color: Theme.error
                         wrapMode: Text.WordWrap
+                    }
+                }
+
+                StyledText {
+                    width: parent.width
+                    visible: root.storage.lastActionMessage.length > 0
+                    text: root.storage.lastActionMessage
+                    wrapMode: Text.WordWrap
+                    color: Theme.surfaceVariantText
+                }
+
+                Column {
+                    width: parent.width
+                    spacing: Theme.spacingS
+                    visible: root.unlockTarget !== null
+                    StyledText {
+                        text: root.unlockTarget ? "Unlock " + root.displayName(root.unlockTarget) : ""
+                        color: Theme.surfaceText
+                    }
+                    DTextField {
+                        id: passphraseField
+                        width: parent.width
+                        echoMode: TextInput.Password
+                        placeholderText: "Passphrase"
+                        onAccepted: unlockButton.clicked()
+                    }
+                    Row {
+                        spacing: Theme.spacingS
+                        DButton {
+                            id: unlockButton
+                            text: "Unlock and mount"
+                            enabled: !root.storage.busyAction && !root.storage.probing && passphraseField.text.length > 0
+                            onClicked: {
+                                if (!enabled || !root.unlockTarget)
+                                    return;
+                                root.storage.unlockPartition(root.unlockTarget, passphraseField.text);
+                                passphraseField.clear();
+                                root.unlockTarget = null;
+                            }
+                        }
+                        DButton {
+                            text: "Cancel"
+                            onClicked: {
+                                passphraseField.clear();
+                                root.unlockTarget = null;
+                            }
+                        }
                     }
                 }
 
@@ -292,15 +362,16 @@ PopoutComponent {
                                 }
 
                                 Rectangle {
+                                    visible: modelData.manageable && root.storage.actionsAvailable
                                     Layout.preferredWidth: {
-                                        if (root.pendingUnmount === modelData.path) return 96;
+                                        if ((root.pendingUnmount === modelData.path && root.pendingVerb === "unmount")) return 96;
                                         if (root.storage.busyAction) return 92;
                                         return 76;
                                     }
                                     Layout.preferredHeight: 30
                                     radius: 15
                                     color: {
-                                        if (root.pendingUnmount === modelData.path)
+                                        if ((root.pendingUnmount === modelData.path && root.pendingVerb === "unmount"))
                                             return Theme.error;
                                         if (root.storage.busyAction)
                                             return Theme.surfaceContainerHigh;
@@ -312,7 +383,7 @@ PopoutComponent {
 
                                     StyledText {
                                         anchors.centerIn: parent
-                                        visible: !root.storage.busyAction && root.pendingUnmount !== modelData.path && modelData.mounted
+                                        visible: !root.storage.busyAction && (root.pendingUnmount !== modelData.path || root.pendingVerb !== "unmount") && modelData.mounted
                                         text: "Unmount"
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.weight: Font.Bold
@@ -321,7 +392,7 @@ PopoutComponent {
 
                                     StyledText {
                                         anchors.centerIn: parent
-                                        visible: !root.storage.busyAction && root.pendingUnmount === modelData.path
+                                        visible: !root.storage.busyAction && (root.pendingUnmount === modelData.path && root.pendingVerb === "unmount")
                                         text: "Confirm? " + root.confirmCountdown
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.weight: Font.Bold
@@ -339,8 +410,8 @@ PopoutComponent {
 
                                     StyledText {
                                         anchors.centerIn: parent
-                                        visible: !root.storage.busyAction && root.pendingUnmount !== modelData.path && !modelData.mounted
-                                        text: "Mount"
+                                        visible: !root.storage.busyAction && (root.pendingUnmount !== modelData.path || root.pendingVerb !== "unmount") && !modelData.mounted
+                                        text: modelData.locked ? "Unlock" : "Mount"
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.weight: Font.Bold
                                         color: Theme.primaryText
@@ -349,11 +420,26 @@ PopoutComponent {
                                     MouseArea {
                                         id: actionButtonMouse
                                         anchors.fill: parent
-                                        enabled: !root.storage.busyAction
+                                        enabled: !root.storage.busyAction && !root.storage.probing
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
                                         onClicked: root.handleAction(modelData)
                                     }
+                                }
+                            }
+
+                            Row {
+                                spacing: Theme.spacingS
+                                DButton {
+                                    visible: modelData.canLock && root.storage.actionsAvailable
+                                    text: root.pendingUnmount === modelData.path && root.pendingVerb === "lock" ? "Confirm lock? " + root.confirmCountdown : "Unmount and lock"
+                                    enabled: !root.storage.busyAction && !root.storage.probing
+                                    onClicked: root.handleAction(modelData, "lock")
+                                }
+                                StyledText {
+                                    text: modelData.encrypted ? (modelData.locked ? "Encrypted · locked" : "Encrypted · unlocked") : ""
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.surfaceVariantText
                                 }
                             }
 
@@ -400,7 +486,8 @@ PopoutComponent {
 
                     StyledText {
                         anchors.fill: parent
-                        text: "Mount / unmount requires system authorization (udisks2)"
+                        text: root.storage.actionsAvailable ? "Storage actions use system authorization (udisks2)" : "Monitoring only · storage actions need Python Gio"
+                        wrapMode: Text.WordWrap
                         font.pixelSize: 10
                         color: Theme.surfaceVariantText
                         horizontalAlignment: Text.AlignHCenter

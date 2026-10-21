@@ -1,0 +1,74 @@
+{
+  "lsblk": {
+    "blockdevices": [
+      {
+        "name": "sdc1",
+        "kname": "sdc1",
+        "type": "part",
+        "size": 10000000,
+        "fstype": "ext4",
+        "mountpoints": [],
+        "label": null,
+        "uuid": null,
+        "maj:min": "8:1"
+      },
+      {
+        "name": "sdd",
+        "kname": "sdd",
+        "type": "disk",
+        "size": 10000000,
+        "fstype": "exfat",
+        "mountpoints": [
+          "/media/Data"
+        ],
+        "label": null,
+        "uuid": null,
+        "maj:min": "8:1"
+      },
+      {
+        "name": "sde1",
+        "kname": "sde1",
+        "type": "part",
+        "size": 10000000,
+        "fstype": "swap",
+        "mountpoints": [],
+        "label": null,
+        "uuid": null,
+        "maj:min": "8:1"
+      },
+      {
+        "name": "sde2",
+        "kname": "sde2",
+        "type": "part",
+        "size": 10000000,
+        "fstype": "LVM2_member",
+        "mountpoints": [],
+        "label": null,
+        "uuid": null,
+        "maj:min": "8:1"
+      },
+      {
+        "name": "loop0",
+        "kname": "loop0",
+        "type": "loop",
+        "size": 10000000,
+        "fstype": "ext4",
+        "mountpoints": [],
+        "label": null,
+        "uuid": null,
+        "maj:min": "8:1"
+      }
+    ]
+  },
+  "findmnt": {
+    "filesystems": [
+      {
+        "source": "/dev/sdd",
+        "target": "/media/Data",
+        "fstype": "exfat"
+      }
+    ]
+  },
+  "objects": {},
+  "aliases": {}
+}

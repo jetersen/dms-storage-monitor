@@ -46,7 +46,7 @@ PluginComponent {
             }
 
             StyledText {
-                text: root.storage.totalStats().percent + "%"
+                text: root.storage.totalStats().known > 0 ? root.storage.totalStats().percent + "%" : "—"
                 font.pixelSize: Theme.fontSizeSmall
                 font.weight: Font.Bold
                 color: root.storage.totalStats().percent >= 90 ? Theme.error : Theme.surfaceText
@@ -68,7 +68,7 @@ PluginComponent {
 
             StyledText {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: root.storage.totalStats().percent + "%"
+                text: root.storage.totalStats().known > 0 ? root.storage.totalStats().percent + "%" : "—"
                 font.pixelSize: 9
                 font.weight: Font.Bold
                 color: Theme.surfaceText

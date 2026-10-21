@@ -1,0 +1,124 @@
+{
+  "lsblk": {
+    "blockdevices": [
+      {
+        "name": "nvme0n1",
+        "kname": "nvme0n1",
+        "type": "disk",
+        "size": 2000398934016,
+        "fstype": null,
+        "mountpoints": [],
+        "label": null,
+        "uuid": null,
+        "maj:min": "259:0",
+        "children": [
+          {
+            "name": "nvme0n1p1",
+            "kname": "nvme0n1p1",
+            "type": "part",
+            "size": 2147483648,
+            "fstype": null,
+            "mountpoints": [
+              "/boot"
+            ],
+            "label": null,
+            "uuid": null,
+            "maj:min": "259:1"
+          },
+          {
+            "name": "nvme0n1p2",
+            "kname": "nvme0n1p2",
+            "type": "part",
+            "size": 1998250311680,
+            "fstype": null,
+            "mountpoints": [],
+            "label": null,
+            "uuid": null,
+            "maj:min": "259:2",
+            "children": [
+              {
+                "name": "cryptroot",
+                "kname": "dm-0",
+                "type": "crypt",
+                "size": 1998233534464,
+                "fstype": null,
+                "mountpoints": [],
+                "label": null,
+                "uuid": null,
+                "maj:min": "254:0",
+                "children": [
+                  {
+                    "name": "system-swap",
+                    "kname": "dm-1",
+                    "type": "lvm",
+                    "size": 77309411328,
+                    "fstype": null,
+                    "mountpoints": [
+                      "[SWAP]"
+                    ],
+                    "label": null,
+                    "uuid": null,
+                    "maj:min": "254:1"
+                  },
+                  {
+                    "name": "system-root",
+                    "kname": "dm-2",
+                    "type": "lvm",
+                    "size": 1920919928832,
+                    "fstype": null,
+                    "mountpoints": [
+                      "/nix",
+                      "/home",
+                      "/srv"
+                    ],
+                    "label": null,
+                    "uuid": null,
+                    "maj:min": "254:2"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "findmnt": {
+    "filesystems": [
+      {
+        "source": "tmpfs[/newroot]",
+        "target": "/",
+        "fstype": "tmpfs",
+        "children": [
+          {
+            "source": "/dev/mapper/system-root[/nix]",
+            "target": "/nix",
+            "fstype": "btrfs",
+            "maj:min": "0:36"
+          },
+          {
+            "source": "/dev/mapper/system-root[/home]",
+            "target": "/home",
+            "fstype": "btrfs",
+            "maj:min": "0:36"
+          },
+          {
+            "source": "/dev/mapper/system-root[/srv]",
+            "target": "/srv",
+            "fstype": "btrfs",
+            "maj:min": "0:36"
+          }
+        ]
+      },
+      {
+        "source": "/dev/nvme0n1p1",
+        "target": "/boot",
+        "fstype": "vfat"
+      }
+    ]
+  },
+  "objects": {},
+  "aliases": {
+    "/dev/mapper/system-root": "/dev/dm-2"
+  }
+}
